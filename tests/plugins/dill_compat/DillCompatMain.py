@@ -261,6 +261,36 @@ def test_member_functions():
     print(pickled_obj.constant())
 
 
+def test_nested_functions():
+    z = 44
+
+    def nested():
+        return 42
+
+    def nested2(defaulted=43, defaulted2=44):
+        return defaulted
+
+    def nested3():
+        return z
+
+    s = dill.dumps(nested)
+    pickled_obj = dill.loads(s)
+
+    s = dill.dumps(nested2)
+    pickled_obj2 = dill.loads(s)
+
+    s = dill.dumps(nested3)
+    pickled_obj3 = dill.loads(s)
+
+    print("called nested without args", pickled_obj())
+    print("called nested with default args", pickled_obj2())
+    print("called nested with closure values", pickled_obj3())
+
+    print("out")
+
+
+test_nested_functions()
+
 test_member_functions()
 test_class_instances()
 if False:
