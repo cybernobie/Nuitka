@@ -91,7 +91,13 @@ def _enableC11Settings(env):
         bool - c11_mode flag
     """
 
-    if env.clangcl_mode:
+    # Lots of cases to deal with, pylint: disable=too-many-branches
+
+    if "force-c11-mode" in env.experimental_flags:
+        c11_mode = True
+    elif "force-cpp-mode" in env.experimental_flags:
+        c11_mode = False
+    elif env.clangcl_mode:
         c11_mode = True
     elif (
         env.msvc_mode
@@ -908,6 +914,16 @@ def setupCCompiler(env, lto_mode, pgo_mode, job_count, onefile_compile):
         else:
             env.Append(CPPDEFINES=["_NUITKA_USE_SYSTEM_CRC32"])
             env.Append(LIBS="z")
+
+    if isAIX():
+        aix_dll_addr_inline_copy_dir = os.path.join(
+            env.nuitka_src, "inline_copy", "aix_dll_addr"
+        )
+        env.Append(
+            CPPPATH=[
+                aix_dll_addr_inline_copy_dir,
+            ],
+        )
 
 
 def _enablePgoSettings(env):

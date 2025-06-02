@@ -32,6 +32,7 @@ from nuitka.Progress import (
 from nuitka.PythonFlavors import (
     getHomebrewInstallPath,
     isAnacondaPython,
+    isCPythonOfficialPackage,
     isHomebrewPython,
     isMSYS2MingwPython,
     isNuitkaPython,
@@ -42,7 +43,6 @@ from nuitka.utils.FileOperations import (
     areInSamePaths,
     getNormalizedPath,
     isFilenameBelowPath,
-    listDir,
     makePath,
 )
 from nuitka.utils.SharedLibraries import copyDllFile, setSharedLibraryRPATH
@@ -178,7 +178,8 @@ def _detectBinaryDLLs(
 
 
 def copyDllsUsed(dist_dir, standalone_entry_points, data_file_paths):
-    # This is complex, because we also need to handle OS specifics.
+    # This is complex, because we also need to handle OS specifics,
+    # pylint: disable=too-many-locals
 
     # Only do ones not ignored
     copy_standalone_entry_points = [
@@ -232,21 +233,6 @@ def copyDllsUsed(dist_dir, standalone_entry_points, data_file_paths):
 
     closeProgressBar()
 
-    # Make all top level directories symlinks for signing issues with MacOS
-    # bundles.
-    if shallCreateAppBundle():
-        resources_dir = getNormalizedPath(os.path.join(dist_dir, "..", "Resources"))
-        makePath(resources_dir)
-
-        for fullpath, filename in listDir(dist_dir):
-            if os.path.isdir(fullpath) and not os.path.islink(fullpath):
-                makePath(resources_dir)
-
-                resources_path = os.path.join(resources_dir, filename)
-
-                os.rename(fullpath, resources_path)
-                os.symlink(os.path.join("..", "Resources", filename), fullpath)
-
     Plugins.onCopiedDLLs(
         dist_dir=dist_dir,
         standalone_entry_points=copy_standalone_entry_points,
@@ -254,13 +240,71 @@ def copyDllsUsed(dist_dir, standalone_entry_points, data_file_paths):
 
     # Add macOS code signature
     if isMacOS():
+        # Make all top level directories symlinks for signing issues with MacOS
+        # bundles.
+        translations = OrderedSet()
+        symlinks = OrderedSet()
+
+        def _translatePath(path):
+            for translation in translations:
+                path = path.replace(translation[0] + "/", translation[1] + "/", 1)
+
+            return path
+
+        if shallCreateAppBundle():
+            resources_dir = getNormalizedPath(os.path.join(dist_dir, "..", "Resources"))
+
+            def getNotSignableDirectoryPart(filename):
+                result = []
+
+                for part in os.path.dirname(filename).split("/"):
+                    result.append(part)
+                    if "." in part:
+                        return "/".join(result)
+
+                return None
+
+            for data_file_path in sorted(data_file_paths, key=len):
+                data_file_path = _translatePath(data_file_path)
+
+                app_dirname, inside_path = data_file_path.split("/", 1)
+
+                if not inside_path.startswith("Contents/MacOS"):
+                    continue
+
+                not_signable_part = getNotSignableDirectoryPart(inside_path)
+                if not_signable_part is None:
+                    continue
+
+                filename = not_signable_part[len("Contents/MacOS/") :]
+                not_signable_path = os.path.join(app_dirname, not_signable_part)
+                resources_path = os.path.join(resources_dir, filename)
+
+                if resources_path in symlinks:
+                    continue
+
+                makePath(os.path.dirname(resources_path))
+                os.rename(not_signable_path, resources_path)
+
+                symlink_target = os.path.join("..", "Resources", filename)
+                for _i in range(filename.count("/")):
+                    symlink_target = os.path.join("..", symlink_target)
+
+                os.symlink(symlink_target, not_signable_path)
+
+                symlinks.add(resources_path)
+                translations.add((not_signable_path, resources_path))
+
         addMacOSCodeSignature(
             filenames=[
-                os.path.join(dist_dir, standalone_entry_point.dest_path)
-                for standalone_entry_point in [main_standalone_entry_point]
-                + copy_standalone_entry_points
+                _translatePath(filename)
+                for filename in [
+                    os.path.join(dist_dir, standalone_entry_point.dest_path)
+                    for standalone_entry_point in [main_standalone_entry_point]
+                    + copy_standalone_entry_points
+                ]
+                + data_file_paths
             ]
-            + data_file_paths
         )
 
 
@@ -272,6 +316,9 @@ def _reduceToPythonPath(used_dll_paths):
     inside_paths = getPythonUnpackedSearchPath()
 
     if isAnacondaPython():
+        inside_paths.insert(0, getSystemPrefixPath())
+
+    if isMacOS() and isCPythonOfficialPackage():
         inside_paths.insert(0, getSystemPrefixPath())
 
     if isHomebrewPython():
@@ -315,12 +362,12 @@ def _detectUsedDLLs(standalone_entry_point, source_dir):
     # pylint: disable=too-many-branches,too-many-locals
 
     if standalone_entry_point.module_name is not None:
-        module_name, module_filename, _kind, finding = locateModule(
-            standalone_entry_point.module_name, parent_package=None, level=0
-        )
-
-        # TODO: How can this be None at all.
-        if module_filename is not None and isStandardLibraryPath(module_filename):
+        # For Linux Pythons, there can be DLLs to pick up from the system.
+        if (
+            not isWin32Windows()
+            and not isMacOS()
+            and isStandardLibraryPath(standalone_entry_point.source_path)
+        ):
             allow_outside_dependencies = True
         else:
             allow_outside_dependencies = Plugins.decideAllowOutsideDependencies(
@@ -358,7 +405,7 @@ Error, cannot detect used DLLs for DLL '%s' in package '%s' due to: %s"""
         # based on the package name.
 
         if standalone_entry_point.module_name is not None and used_dll_paths:
-            module_name, module_filename, _kind, finding = locateModule(
+            module_name, _module_filename, _kind, finding = locateModule(
                 standalone_entry_point.module_name, parent_package=None, level=0
             )
 
@@ -410,7 +457,7 @@ Error, cannot detect used DLLs for DLL '%s' in package '%s' due to: %s"""
                 # where required that way (openvino) or known to be good only (av),
                 # because it broke other things. spell-checker: ignore openvino
 
-                dest_path = os.path.normpath(
+                dest_path = getNormalizedPath(
                     os.path.join(
                         os.path.dirname(standalone_entry_point.dest_path),
                         os.path.basename(used_dll_path),

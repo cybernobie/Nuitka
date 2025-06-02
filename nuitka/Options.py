@@ -1003,6 +1003,14 @@ def commentArgs():
 Error, to compile a package, specify its directory but, not the '__init__.py'."""
             )
 
+        if os.path.normcase(os.path.basename(filename)) == "__main__.py":
+            Tracing.general.warning(
+                """\
+To compile a package with a '__main__' module, specify its containing
+directory but, not the '__main__.py' itself, also consider if
+'--python-flag=-m' should be used."""
+            )
+
     # Inform the user about potential issues with the running version. e.g. unsupported
     # version.
     if python_version_str not in getSupportedPythonVersions():
@@ -1284,12 +1292,12 @@ and not with the non-debug version.
 """
         )
 
-    if isMacOS() and shallCreateAppBundle() and not options.macos_icon_path:
+    if shallCreateAppBundle() and not options.macos_icon_path:
         Tracing.options_logger.warning(
             """\
-For application bundles, you ought to specify an icon with '--macos-app-icon'.", \
-otherwise a dock icon may not be present. Specify 'none' value to disable \
-this warning."""
+For application bundles, you ought to specify an icon with '--macos-app-icon=...' \
+otherwise a dock icon may not be present. Specify the value as 'none' value \
+to disable this warning."""
         )
 
     if (
@@ -2238,6 +2246,9 @@ def _checkIconPaths(icon_paths):
 
 def getWindowsIconPaths():
     """*list of str*, values of ``--windows-icon-from-ico``"""
+    if not isWin32Windows():
+        return ()
+
     return _checkIconPaths(options.windows_icon_path)
 
 
@@ -2271,6 +2282,9 @@ def getMacOSIconPaths():
 
 def getWindowsIconExecutablePath():
     """*str* or *None* if not given, value of ``--windows-icon-from-exe``"""
+    if not isWin32Windows():
+        return None
+
     return options.icon_exe_path
 
 
